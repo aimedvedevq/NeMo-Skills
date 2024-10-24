@@ -115,11 +115,11 @@ def check_contamination(cfg: CheckContaminationConfig):
 
     with open(cfg.output_file, "at" if cfg.skip_filled else "wt", encoding="utf-8", buffering=1) as fout:
         for idx, data_point in enumerate(tqdm(data, initial=starting_idx, total=len(data) + starting_idx)):
-            data_point.pop(cfg.generation_key, None)
+            data_point.pop(cfg.generation_key, None)  # Remove existing contamination flag if any
             data_points.append(data_point)
 
             if len(data_points) == cfg.batch_size or idx == len(data) - 1:
-                # constructing the data for llm calls
+                # Construct the data for LLM calls
                 all_data = []
                 for original_data_point in data_points:
                     for similar_item in original_data_point['similar_items']:
@@ -145,21 +145,26 @@ def check_contamination(cfg: CheckContaminationConfig):
                 output_idx = 0
                 for original_data_point in data_points:
                     all_generations = []
-                    elem = {}
+                    elem = dict(original_data_point)  # Create a copy of the original data point to preserve all key-value pairs
+
                     contaminated = False
                     for output in outputs[output_idx : output_idx + top_k * (2 if cfg.check_both_ways else 1)]:
                         all_generations.append(output['generation'])
-                        if output['generation'].strip() == "True":
+                        if "True" in output['generation'].strip():
                             contaminated = True
                         output_idx += 1
-                    elem[cfg.generation_key] = contaminated
+
+                    elem[cfg.generation_key] = contaminated  # Add contamination flag
+                    elem["all_generations"] = all_generations  # Add all generations to the result
+
                     if contaminated:
                         num_contaminated += 1
                     total += 1
-                    elem["all_generations"] = all_generations
-                    elem.update(original_data_point)
-                    fout.write(json.dumps(elem) + '\n')
+
+                    fout.write(json.dumps(elem) + '\n')  # Write the result as a JSONL entry, preserving all original data
+
                 data_points = []
+                
     if total > 0:
         LOG.info("Contamination portion: %.2f%% (%d/%d)", 100 * num_contaminated / total, num_contaminated, total)
 

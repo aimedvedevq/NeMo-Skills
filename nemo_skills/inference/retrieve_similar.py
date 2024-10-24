@@ -29,21 +29,51 @@ from nemo_skills.utils import get_help_message, nested_dataclass, setup_logging,
 LOG = logging.getLogger(__file__)
 
 
-def top_k_similarity(from_emb, to_emb, top_k):
+def top_k_similarity(from_emb, to_emb, top_k, similarity_threshold=0.90):
     cosine_scores = util.cos_sim(to_emb, from_emb)
-    return torch.topk(cosine_scores, k=top_k, dim=1)
+    
+    # Get top K results first
+    top_k_results = torch.topk(cosine_scores, k=top_k, dim=1)
+    
+    # Store filtered indices and scores
+    top_k_filtered_indices = []
+    top_k_filtered_scores = []
+
+    for i in range(cosine_scores.size(0)):
+        indices = []
+        scores = []
+
+        # Retrieve top K results first
+        for j in range(top_k_results.indices.size(1)):
+            indices.append(top_k_results.indices[i][j].item())
+            scores.append(top_k_results.values[i][j].item())
+        
+        # Check if any additional items meet or exceed the threshold
+        above_threshold_items = (cosine_scores[i] >= similarity_threshold).nonzero(as_tuple=True)[0].tolist()
+        
+        # If there are more than 5 items above the threshold, take all those items
+        if len(above_threshold_items) >= 5:
+            indices = above_threshold_items
+            scores = [cosine_scores[i][idx].item() for idx in above_threshold_items]
+        
+        # Collect final indices and scores (either top 5 or all above threshold)
+        top_k_filtered_indices.append(indices[:max(len(indices), 5)])  # Ensures at least 5 are included
+        top_k_filtered_scores.append(scores[:max(len(scores), 5)])
+    
+    return top_k_filtered_indices, top_k_filtered_scores
 
 
 def encode(model, data, batch_size):
-    return model.encode(data, batch_size=batch_size, show_progress_bar=True)
+    clean_data = [str(item['problem']) for item in data if 'problem' in item]  # Extracts 'problem' field
+    return model.encode(clean_data, batch_size=batch_size, show_progress_bar=True)
 
 
 def read_data(file_paths, retrieve_key) -> list:
-    all_data = set()
+    all_data = []
     for file_path in unroll_files(file_paths):
         with open(file_path, 'rt', encoding='utf-8') as file:
-            all_data.update(set([json.loads(line)[retrieve_key] for line in file]))
-    return list(all_data)
+            all_data.extend([json.loads(line) for line in file])
+    return all_data
 
 
 @nested_dataclass
@@ -91,18 +121,18 @@ def retrieve_similar(cfg: RetrieveSimilarConfig):
 
     retrieve_from_embeddings = encode(model, retrieve_from_list, batch_size=cfg.batch_size)
     compare_to_embeddings = encode(model, compare_to_list, batch_size=cfg.batch_size)
-    top_k_indices = top_k_similarity(retrieve_from_embeddings, compare_to_embeddings, cfg.top_k)
+    top_k_indices, top_k_scores = top_k_similarity(retrieve_from_embeddings, compare_to_embeddings, cfg.top_k, similarity_threshold=0.90)
     top_k_similar_items = []
     for i, compare_item in enumerate(compare_to_list):
-        similar_items = [retrieve_from_list[index] for index in top_k_indices.indices[i]]
-        similarity_scores = top_k_indices.values[i].tolist()
+        similar_items = [retrieve_from_list[index] for index in top_k_indices[i]]
+        similarity_scores = top_k_scores[i]
         top_k_similar_items.append(
             {
-                cfg.retrieve_key: compare_item,
-                'similar_items': similar_items,
+                **compare_item,
+                'similar_items': [item["problem"] for item in similar_items],
                 'similarity_scores': similarity_scores,
             }
-        )
+    )
 
     with open(cfg.output_file, 'w', encoding='utf-8') as fout:
         for entry in top_k_similar_items:

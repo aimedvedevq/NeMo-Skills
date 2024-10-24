@@ -36,7 +36,7 @@ def main():
         f'    --host="0.0.0.0" '
         f'    --port={args.port} '
         f'    --tensor-parallel-size={args.num_gpus} '
-        f'    --gpu-memory-utilization=0.9 '
+        f'    --gpu-memory-utilization=0.92 '
         f'    --max-num-seqs=256 '
         f'    --enforce-eager '
         f'    --disable-log-requests '
