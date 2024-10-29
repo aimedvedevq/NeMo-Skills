@@ -1,105 +1,113 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import json
 import logging
-import sys
-from dataclasses import asdict, field
-
+from dataclasses import dataclass, field
+import os
 import hydra
 from tqdm import tqdm
+from vllm import LLM, SamplingParams
 
-from nemo_skills.code_execution.sandbox import sandbox_params
-from nemo_skills.inference.generate import InferenceConfig
-from nemo_skills.inference.server.code_execution_model import get_model, server_params
-from nemo_skills.prompt.utils import get_prompt
-from nemo_skills.utils import get_help_message, nested_dataclass, setup_logging
-
-LOG = logging.getLogger(__file__)
+LOG = logging.getLogger(__name__)
 
 
-@nested_dataclass(kw_only=True)
+@dataclass
 class CheckContaminationConfig:
     """Top-level parameters for the script"""
 
-    input_file: str  # an output of the retrieve_similar.py script
-    output_file: str  # where to save the generations
-    # Inference server configuration {server_params}
-    server: dict = field(default_factory=dict)
-    # Prompt configuration - path to yaml files
-    prompt_template: str | None = None  # not required for OpenAI server
+    input_file: str  # Output of the retrieve_similar.py script
+    output_file: str  # Where to save the generations
+    # Prompt configuration
+    prompt_template: str | None = None  # Path to the prompt template file
     prompt_config: str = "judge/check-contamination"
-    examples_type: str | None = None  # to be able to customize few-shot examples
-    inference: InferenceConfig = field(default_factory=InferenceConfig)  # LLM call parameters
-
+    examples_type: str | None = None  # To customize few-shot examples
+    # Inference parameters
+    model_name_or_path: str = "gpt2"  # Model name or path for vLLM
+    max_tokens: int = 256
+    temperature: float = 0.7
+    top_p: float = 0.95
     batch_size: int = 128
     generation_key: str = "contaminated"
-    retrieve_key: str = "problem"  # will be used to fill in prompt with retrieve_key1 and retrieve_key2
-
-    skip_filled: bool = False  # skip already filled generations
-
-    # ask both with retrieve_key1 / retrieve_key2 and retrieve_key2 / retrieve_key1 and fill True if any is True
-    check_both_ways: bool = False
-
-    # can add this flag to just print the first prompt instead of running generation
-    # useful to double check that your data can be loaded and prompt has what you expect
-    dry_run: bool = False
+    retrieve_key: str = "problem"  # Used to fill in prompt with retrieve_key1 and retrieve_key2
+    skip_filled: bool = False  # Skip already filled generations
+    check_both_ways: bool = False  # Check contamination in both directions
+    dry_run: bool = False  # If True, only print the first prompt without running generation
 
     def __post_init__(self):
-        if self.server.server_type != "openai" and self.prompt_template is None:
-            raise ValueError("Prompt template is required for non-OpenAI servers")
+        if self.prompt_template is None:
+            # Default prompt template if none is provided
+            self.prompt_template = (
+                """  Help me determine if the following two planning tasks in given are paraphrased.
 
-        if self.server.server_type == "openai" and self.prompt_template is not None:
-            raise ValueError("Prompt template is not supported for OpenAI server")
+First planning task: {problem1}
+Second planning task: {problem2}
+
+Disregard the names and minor changes in word order that appear within.
+
+If the two tasks are very similar (paraphrased) and if they produce the same answer in corresponding conditions, we consider them to be the same task.
+
+Give a brief explanation and respond with "True" (tasks are the same) or "False" (tasks are different). Do not respond with anything else."""
+            )
+
+
+def setup_logging():
+    logging.basicConfig(level=logging.INFO)
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
-cs.store(name="base_check_contamination_config", node=CheckContaminationConfig)
+cs.store(name="check_contamination_config", node=CheckContaminationConfig)
 
 
-# TODO: try to unify common parts in 3 similar generation scripts
-@hydra.main(version_base=None, config_name='base_check_contamination_config', config_path='.')
+@hydra.main(version_base=None, config_name="check_contamination_config")
+def main(cfg: CheckContaminationConfig):
+    check_contamination(cfg)
+
+
 def check_contamination(cfg: CheckContaminationConfig):
-    cfg = CheckContaminationConfig(_init_nested=True, **cfg)
     LOG.info("Config used: %s", cfg)
 
-    llm = get_model(**cfg.server)
-    prompt = get_prompt(cfg.prompt_config, cfg.prompt_template, examples_type=cfg.examples_type)
-    LOG.info("Prompt used: %s", prompt)
+    # Initialize the vLLM engine with the specified model
+    llm_engine = LLM(model=cfg.model_name_or_path,
+                    download_dir='/workspace-SR003.nfs2/huggingface/hub/',
+                    tensor_parallel_size=8,
+                    gpu_memory_utilization=0.92,
+                    )
 
-    # assuming everything fits in memory for simplicity
-    with open(cfg.input_file, 'rt', encoding='utf-8') as fin:
+    # Prepare the prompt template
+    prompt_template = (
+                """Help me determine if the following two planning tasks in given are the same.
+
+First planning task: {problem1}
+Second planning task: {problem2}
+
+Disregard the names and minor changes in condition that are almost not affecting the final plan appear within.
+
+If the two tasks are very similar (paraphrased) and if they produce the same answer in corresponding conditions, we consider them to be the same task.
+
+Respond with "True" (tasks are the same) or "False" (tasks are different). Dont generate anything else"""
+    )
+
+    LOG.info("Prompt used: %s", prompt_template)
+
+    # Load data
+    with open(cfg.input_file, "rt", encoding="utf-8") as fin:
         data = [json.loads(line) for line in fin]
 
     first_element = {
-        f'{cfg.retrieve_key}1': data[0][cfg.retrieve_key],
-        f'{cfg.retrieve_key}2': data[0]['similar_items'][0],
+        f"{cfg.retrieve_key}1": data[0][cfg.retrieve_key],
+        f"{cfg.retrieve_key}2": data[0]["similar_items"][0],
     }
-    LOG.info(
-        "Example prompt:\nData dictionary: %s\nPrompt: %s",
-        first_element,
-        prompt.fill(first_element),
-    )
+
+    # Create the prompt by filling in the template
+    example_prompt = prompt_template.format(**first_element)
+    LOG.info("Example prompt:\n%s", example_prompt)
 
     if cfg.dry_run:
         return
 
     data_points = []
 
-    # we need to make top_k (* 2 if cfg.check_both_ways) generations for each data point
-    # correcting to not exceed the requesting batch size
-    top_k = len(data[0]['similar_items'])
+    # Adjust batch size
+    top_k = max([len(i["similar_items"]) for i in data])
+    print(top_k)
     cfg.batch_size = max(1, cfg.batch_size // top_k // (2 if cfg.check_both_ways else 1))
 
     starting_idx = 0
@@ -112,73 +120,88 @@ def check_contamination(cfg: CheckContaminationConfig):
     data = data[starting_idx:]
     total = 0
     num_contaminated = 0
+    
+    output_dir = os.path.dirname(cfg.output_file)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    
+    
 
     with open(cfg.output_file, "at" if cfg.skip_filled else "wt", encoding="utf-8", buffering=1) as fout:
-        for idx, data_point in enumerate(tqdm(data, initial=starting_idx, total=len(data) + starting_idx)):
-            data_point.pop(cfg.generation_key, None)  # Remove existing contamination flag if any
+        for idx, data_point in enumerate(
+            tqdm(data, initial=starting_idx, total=len(data) + starting_idx)
+        ):
+            data_point.pop(cfg.generation_key, None)
             data_points.append(data_point)
 
             if len(data_points) == cfg.batch_size or idx == len(data) - 1:
-                # Construct the data for LLM calls
+                # Construct data for LLM calls
                 all_data = []
                 for original_data_point in data_points:
-                    for similar_item in original_data_point['similar_items']:
+                    for similar_item in original_data_point["similar_items"]:
                         all_data.append(
                             {
-                                f'{cfg.retrieve_key}1': original_data_point[cfg.retrieve_key],
-                                f'{cfg.retrieve_key}2': similar_item,
+                                f"{cfg.retrieve_key}1": original_data_point[cfg.retrieve_key],
+                                f"{cfg.retrieve_key}2": similar_item,
                             }
                         )
 
                         if cfg.check_both_ways:
                             all_data.append(
                                 {
-                                    f'{cfg.retrieve_key}2': original_data_point[cfg.retrieve_key],
-                                    f'{cfg.retrieve_key}1': similar_item,
+                                    f"{cfg.retrieve_key}2": original_data_point[cfg.retrieve_key],
+                                    f"{cfg.retrieve_key}1": similar_item,
                                 }
                             )
 
-                prompts = [prompt.fill(dp) for dp in all_data]
-                stop_phrases = prompt.stop_phrases
+                prompts = [prompt_template.format(**dp) for dp in all_data]
 
-                outputs = llm.generate(prompts=prompts, stop_phrases=stop_phrases, **asdict(cfg.inference))
+                # Prepare sampling parameters
+                sampling_params = SamplingParams(
+                    temperature=cfg.temperature,
+                    top_p=cfg.top_p,
+                    max_tokens=cfg.max_tokens,
+                )
+
+                
+                
+                tokenizer = llm_engine.get_tokenizer()
+                prompts = [tokenizer.apply_chat_template([{"role": "user", "content": message}], tokenize=False, add_generation_prompt=True) for message in prompts]
+                # Generate outputs using vLLM
+                outputs = llm_engine.generate(prompts, sampling_params)
+
+                # Process the outputs
                 output_idx = 0
                 for original_data_point in data_points:
                     all_generations = []
-                    elem = dict(original_data_point)  # Create a copy of the original data point to preserve all key-value pairs
-
+                    elem = {}
                     contaminated = False
-                    for output in outputs[output_idx : output_idx + top_k * (2 if cfg.check_both_ways else 1)]:
-                        all_generations.append(output['generation'])
-                        if "True" in output['generation'].strip():
+                    num_generations = len(original_data_point["similar_items"]) * (2 if cfg.check_both_ways else 1)
+                    for _ in range(num_generations):
+                        output = outputs[output_idx]
+                        generation = output.outputs[0].text
+                        all_generations.append(generation)
+                        if "True" in generation.strip():
                             contaminated = True
                         output_idx += 1
-
-                    elem[cfg.generation_key] = contaminated  # Add contamination flag
-                    elem["all_generations"] = all_generations  # Add all generations to the result
-
+                    elem[cfg.generation_key] = contaminated
                     if contaminated:
                         num_contaminated += 1
                     total += 1
-
-                    fout.write(json.dumps(elem) + '\n')  # Write the result as a JSONL entry, preserving all original data
-
+                    elem["all_generations"] = all_generations
+                    elem.update(original_data_point)
+                    fout.write(json.dumps(elem) + "\n")
                 data_points = []
-                
     if total > 0:
-        LOG.info("Contamination portion: %.2f%% (%d/%d)", 100 * num_contaminated / total, num_contaminated, total)
-
-
-HELP_MESSAGE = get_help_message(
-    CheckContaminationConfig,
-    server_params=server_params(),
-    sandbox_params=sandbox_params(),
-)
+        LOG.info(
+            "Contamination portion: %.2f%% (%d/%d)",
+            100 * num_contaminated / total,
+            num_contaminated,
+            total,
+        )
 
 
 if __name__ == "__main__":
-    if '--help' in sys.argv or '-h' in sys.argv:
-        print(HELP_MESSAGE)
-    else:
-        setup_logging()
-        check_contamination()
+    setup_logging()
+    main()
+

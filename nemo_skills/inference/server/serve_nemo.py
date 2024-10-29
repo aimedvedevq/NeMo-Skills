@@ -35,7 +35,7 @@ from pytorch_lightning.trainer.trainer import Trainer
 This is the script to run GPT text generation.
 
 Usage:
-         python megatron_gpt_eval.py \
+        python megatron_gpt_eval.py \
             gpt_model_file=PATH_TO_MODEL \
             trainer.devices=1 \
             trainer.num_nodes=1 \

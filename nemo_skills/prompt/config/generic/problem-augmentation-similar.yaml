@@ -8,9 +8,9 @@ few_shot_examples:
 system: ""
 
 user: |-
-  Write a new math problem similar to a given one. Make the new problem reasonable and solvable.
+  Write a planning task similar to a given one. Make the new problem reasonable and solvable.
 
-  {examples}Original problem:
+  {examples}Original Planning Task:
   {problem}
 
   Write another problem similar to this one.

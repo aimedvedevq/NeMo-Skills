@@ -1,0 +1,15 @@
+input_file: /workspace/NeMo-Skills/math-contamination-retrieved.jsonl
+output_file: /workspace/NeMo-Skills/contamination-results.jsonl
+prompt_template: null
+prompt_config: judge/check-contamination
+examples_type: null
+model_name_or_path: nvidia/Llama-3.1-Nemotron-70B-Instruct-HF
+max_tokens: 256
+temperature: 0.7
+top_p: 0.95
+batch_size: 128
+generation_key: contaminated
+retrieve_key: problem
+skip_filled: false
+check_both_ways: false
+dry_run: false

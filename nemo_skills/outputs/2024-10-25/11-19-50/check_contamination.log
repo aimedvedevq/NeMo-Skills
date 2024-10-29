@@ -1,0 +1,27 @@
+[2024-10-25 11:19:50,628][__main__][INFO] - Config used: {'input_file': '/home/jovyan/medvedev/NeMo-Skills/nemo_skills/math-contamination-retrieved.jsonl', 'output_file': './contamination-results.jsonl', 'prompt_template': None, 'prompt_config': 'judge/check-contamination', 'examples_type': None, 'model_name_or_path': 'nvidia/Llama-3.1-Nemotron-70B-Instruct-HF', 'max_tokens': 256, 'temperature': 0.7, 'top_p': 0.95, 'batch_size': 128, 'generation_key': 'contaminated', 'retrieve_key': 'problem', 'skip_filled': False, 'check_both_ways': False, 'dry_run': False}
+[2024-10-25 11:20:49,110][__main__][INFO] - Prompt used: Help me determine if the following two planning tasks in given are the same.
+
+First planning task: {problem1}
+Second planning task: {problem2}
+
+Disregard the names and minor changes in condition that are almost not affecting the final plan appear within.
+
+If the two tasks are very similar (paraphrased) and if they produce the same answer in corresponding conditions, we consider them to be the same task.
+
+Respond with "True" (tasks are the same) or "False" (tasks are different). Dont generate anything else
+[2024-10-25 11:20:49,751][__main__][INFO] - Example prompt:
+Help me determine if the following two planning tasks in given are the same.
+
+First planning task: Task: Replace the glass in the bedroom door.
+Conditions: Bedroom. The door to the bedroom is closed. The door is equipped with a handle. The door is equipped with old glass. The light in the bedroom is off. The light switch is located to the right of the door. By the wall in the bedroom, there is a new glass for the door. 
+ Formulate a plan adhering to this format.
+Second planning task: Task: Remove the curtains from the bedroom.
+Conditions: Bedroom. The door to the bedroom is closed. The light in the bedroom is off. The light switch is located to the right of the door. There is a table in the bedroom. Two curtains are laying on the table. Living room. The door to the living room is closed. The light in the living room is off. The light switch is located to the right of the door. There is a table by the wall on the left. 
+ Formulate a plan adhering to this format.
+
+Disregard the names and minor changes in condition that are almost not affecting the final plan appear within.
+
+If the two tasks are very similar (paraphrased) and if they produce the same answer in corresponding conditions, we consider them to be the same task.
+
+Respond with "True" (tasks are the same) or "False" (tasks are different). Dont generate anything else
+[2024-10-25 12:03:38,183][__main__][INFO] - Contamination portion: 57.04% (6952/12187)
